@@ -42,6 +42,7 @@ import {
     makeDirectoryDefaultMenuItems,
     mergeError,
     overwriteError,
+    pastePathIntoTerminal,
 } from "./preview-directory-utils";
 import { type PreviewModel } from "./preview-model";
 import type { PreviewEnv } from "./previewenv";
@@ -674,6 +675,9 @@ function DirectoryPreview({ model }: DirectoryPreviewProps) {
                 setSearchText((current) => current.slice(0, -1));
                 return true;
             }
+            if (checkKeyPressed(waveEvent, "Ctrl:Shift:p")) {
+                return pastePathIntoTerminal(model, selectedPath || dirPath);
+            }
             if (
                 checkKeyPressed(waveEvent, "Space") &&
                 searchText == "" &&
@@ -692,7 +696,7 @@ function DirectoryPreview({ model }: DirectoryPreviewProps) {
         return () => {
             model.directoryKeyDownHandler = null;
         };
-    }, [filteredData, selectedPath, searchText]);
+    }, [filteredData, selectedPath, searchText, dirPath]);
 
     useEffect(() => {
         if (filteredData.length != 0 && focusIndex > filteredData.length - 1) {

@@ -3,9 +3,14 @@
 
 import { globalStore } from "@/app/store/jotaiStore";
 import { TabRpcClient } from "@/app/store/wshrpcutil";
+import type { TermViewModel } from "@/app/view/term/term-model";
+import { getLayoutModelForStaticTab } from "@/layout/index";
+import { getBlockComponentModel, refocusNode } from "@/store/global";
 import { fireAndForget, isBlank } from "@/util/util";
 import dayjs from "dayjs";
 import React from "react";
+import { quote as shellQuote } from "shell-quote";
+import { pickPasteTargetTerm, TermBlockInfo } from "./preview-directory-paste";
 import { type PreviewModel } from "./preview-model";
 
 export const recursiveError = "recursive flag must be set for directory operations";
@@ -150,6 +155,36 @@ export function handleFileDelete(
         }
         model.refreshCallback();
     });
+}
+
+/**
+ * Types path (shell quoted) at the prompt of a terminal in the same tab and focuses that terminal.
+ * See pickPasteTargetTerm for which terminal. Returns false when the tab has no terminal.
+ */
+export function pastePathIntoTerminal(model: PreviewModel, path: string): boolean {
+    const layoutModel = getLayoutModelForStaticTab();
+    const leafOrder = globalStore.get(layoutModel.leafOrder) ?? [];
+    const terms: TermBlockInfo[] = [];
+    for (const leaf of leafOrder) {
+        const block = globalStore.get(model.env.wos.getWaveObjectAtom<Block>(`block:${leaf.blockid}`));
+        if (block?.meta?.view === "term") {
+            terms.push({ blockId: leaf.blockid, connection: block.meta.connection });
+        }
+    }
+    const blockOfNode = new Map(leafOrder.map((leaf) => [leaf.nodeid, leaf.blockid]));
+    const focusHistory = layoutModel.getFocusedNodeIdHistory().map((nodeId) => blockOfNode.get(nodeId));
+    const connection = globalStore.get(model.blockAtom)?.meta?.connection;
+    const targetId = pickPasteTargetTerm(terms, focusHistory, connection);
+    if (targetId == null || isBlank(path)) {
+        return false;
+    }
+    const terminal = (getBlockComponentModel(targetId)?.viewModel as TermViewModel)?.termRef?.current?.terminal;
+    if (terminal == null) {
+        return false;
+    }
+    terminal.paste(shellQuote([path]) + " ");
+    refocusNode(targetId);
+    return true;
 }
 
 export function makeDirectoryDefaultMenuItems(model: PreviewModel): ContextMenuItem[] {
