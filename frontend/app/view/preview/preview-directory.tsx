@@ -8,7 +8,7 @@ import { useWaveEnv } from "@/app/waveenv/waveenv";
 import { checkKeyPressed, isCharacterKeyEvent } from "@/util/keyutil";
 import { PLATFORM, PlatformMacOS } from "@/util/platformutil";
 import { addOpenMenuItems } from "@/util/previewutil";
-import { fireAndForget } from "@/util/util";
+import { fireAndForget, isLocalConnName } from "@/util/util";
 import { formatRemoteUri } from "@/util/waveutil";
 import { offset, useDismiss, useFloating, useInteractions } from "@floating-ui/react";
 import {
@@ -27,10 +27,12 @@ import { PrimitiveAtom, atom, useAtom, useAtomValue, useSetAtom } from "jotai";
 import { OverlayScrollbarsComponent, OverlayScrollbarsComponentRef } from "overlayscrollbars-react";
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDrag, useDrop } from "react-dnd";
+import { NativeTypes } from "react-dnd-html5-backend";
 import { quote as shellQuote } from "shell-quote";
 import { debounce } from "throttle-debounce";
 import "./directorypreview.scss";
 import { EntryManagerOverlay, EntryManagerOverlayProps, EntryManagerType } from "./entry-manager";
+import { getDroppedLocalFiles, isInFolder } from "./preview-directory-drop";
 import {
     cleanMimetype,
     getBestUnit,
@@ -756,10 +758,39 @@ function DirectoryPreview({ model }: DirectoryPreviewProps) {
         [model.refreshCallback]
     );
 
+    const copyDroppedLocalFiles = useCallback(
+        async (paths: string[], skippedDirs: string[]) => {
+            if (skippedDirs.length > 0) {
+                setErrorMsg({
+                    status: "Folders Not Copied",
+                    text: `Only files can be dropped here, not folders: ${skippedDirs.join(", ")}`,
+                    level: "warning",
+                });
+            }
+            const desturi = await model.formatRemoteUri(dirPath, globalStore.get);
+            for (const path of paths) {
+                if (isLocalConnName(conn) && isInFolder(path, dirPath)) {
+                    // copying a file onto itself would offer "Delete Then Copy", which deletes it
+                    continue;
+                }
+                const data: CommandFileCopyData = {
+                    srcuri: formatRemoteUri(path, "local"),
+                    desturi,
+                    opts: { timeout: 31536000000 }, // one year
+                };
+                await handleDropCopy(data, false);
+            }
+        },
+        [conn, dirPath, model.formatRemoteUri, handleDropCopy]
+    );
+
     const [, drop] = useDrop(
         () => ({
-            accept: "FILE_ITEM", //a name of file drop type
+            accept: ["FILE_ITEM", NativeTypes.FILE], //a name of file drop type
             canDrop: (_, monitor) => {
+                if (monitor.getItemType() === NativeTypes.FILE) {
+                    return monitor.isOver({ shallow: false });
+                }
                 const dragItem = monitor.getItem<DraggedFile>();
                 // drop if not current dir is the parent directory of the dragged item
                 // requires absolute path
@@ -769,6 +800,17 @@ function DirectoryPreview({ model }: DirectoryPreviewProps) {
                 return false;
             },
             drop: async (draggedFile: DraggedFile, monitor) => {
+                if (monitor.getItemType() === NativeTypes.FILE) {
+                    // must read the paths before the first await, the drop event's items are gone after it
+                    const nativeItem = draggedFile as unknown as { items: DataTransferItemList; files: File[] };
+                    const { paths, skippedDirs } = getDroppedLocalFiles(
+                        nativeItem.items,
+                        nativeItem.files,
+                        env.electron.getPathForFile
+                    );
+                    await copyDroppedLocalFiles(paths, skippedDirs);
+                    return;
+                }
                 if (!monitor.didDrop()) {
                     const timeoutYear = 31536000000; // one year
                     const opts: FileCopyOpts = {
@@ -785,7 +827,7 @@ function DirectoryPreview({ model }: DirectoryPreviewProps) {
             },
             // TODO: mabe add a hover option?
         }),
-        [dirPath, model.formatRemoteUri, model.refreshCallback]
+        [dirPath, model.formatRemoteUri, model.refreshCallback, copyDroppedLocalFiles]
     );
 
     useEffect(() => {
